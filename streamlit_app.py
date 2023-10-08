@@ -1,16 +1,15 @@
 import streamlit as st
 import pickle
 import pandas as pd
-
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut, RepeatedStratifiedKFold
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import LabelEncoder
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
-
+from sklearn.impute import SimpleImputer  # Added for handling missing values
 
 # Step 1
 st.title("Machine Learning Forecasting App")
@@ -23,6 +22,11 @@ if uploaded_file is not None:
 
     # Step 3
     selected_column = st.selectbox("Select the column to forecast", data.columns)
+
+    # Step 4: Option to remove missing values
+    remove_missing_values = st.checkbox("Remove Missing Values?")
+    if remove_missing_values:
+        data.dropna(inplace=True)  # Remove rows with missing values
 
     # Step 5
     minimize_imbalance = st.checkbox("Minimize class imbalance?")
@@ -55,8 +59,8 @@ if uploaded_file is not None:
     # Step 6c
     model_name = st.selectbox("Select model", ["Logistic Regression", "Random Forest", "SVM", "K-Nearest Neighbors"])
 
-    # Store accuracies for each test
-    accuracies = []
+    # Store accuracies, precisions, recalls, and F1-scores for each test
+    metrics = []
 
     # Step 7: Run button
     if st.button("Run"):
@@ -100,12 +104,19 @@ if uploaded_file is not None:
             # Model prediction
             y_pred = model.predict(X_test)
 
-            # Calculate accuracy
+            # Calculate metrics
             accuracy = accuracy_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, average='weighted')  # Use 'weighted' for multiclass
+            recall = recall_score(y_test, y_pred, average='weighted')  # Use 'weighted' for multiclass
+            f1 = f1_score(y_test, y_pred, average='weighted')  # Use 'weighted' for multiclass
+
             st.write(f"Accuracy: {accuracy:.2f}")
+            st.write(f"Precision: {precision:.2f}")
+            st.write(f"Recall: {recall:.2f}")
+            st.write(f"F1 Score: {f1:.2f}")
 
         if validation_type != "Train-Test Split":
-            for train_idx, test_idx in kf.split(data):
+            for i, (train_idx, test_idx) in enumerate(kf.split(data), start=1):
                 X_train, X_test = X_encoded.iloc[train_idx], X_encoded.iloc[test_idx]
                 y_train, y_test = y_encoded[train_idx], y_encoded[test_idx]
 
@@ -127,51 +138,57 @@ if uploaded_file is not None:
                 # Model prediction
                 y_pred = model.predict(X_test)
 
-                # Calculate accuracy
+                # Calculate metrics
                 accuracy = accuracy_score(y_test, y_pred)
-                accuracies.append(accuracy)
+                precision = precision_score(y_test, y_pred, average='weighted')  # Use 'weighted' for multiclass
+                recall = recall_score(y_test, y_pred, average='weighted')  # Use 'weighted' for multiclass
+                f1 = f1_score(y_test, y_pred, average='weighted')  # Use 'weighted' for multiclass
 
-                if len(accuracies) >= 5:  # Stop after 5 tests
+                metrics.append((accuracy, precision, recall, f1))
+
+                if len(metrics) >= 5:  # Stop after 5 tests
                     break
 
-            mean_accuracy = sum(accuracies) / len(accuracies)
+            mean_accuracy = sum(accuracy for accuracy, _, _, _ in metrics) / len(metrics)
+            mean_precision = sum(precision for _, precision, _, _ in metrics) / len(metrics)
+            mean_recall = sum(recall for _, _, recall, _ in metrics) / len(metrics)
+            mean_f1 = sum(f1 for _, _, _, f1 in metrics) / len(metrics)
+
             st.write(f"Mean Accuracy: {mean_accuracy:.2f}")
+            st.write(f"Mean Precision: {mean_precision:.2f}")
+            st.write(f"Mean Recall: {mean_recall:.2f}")
+            st.write(f"Mean F1 Score: {mean_f1:.2f}")
 
-            
+    # Step 8: Save Model
+    if st.button("Save Model"):
+        if model_name == "Logistic Regression":
+            model = LogisticRegression()
+        elif model_name == "Random Forest":
+            model = RandomForestClassifier()
+        elif model_name == "SVM":
+            model = SVC()
+        elif model_name == "K-Nearest Neighbors":
+            model = KNeighborsClassifier()
+        else:
+            st.write("Invalid model selection")
 
-     
+        X = data.drop(columns=[selected_column])
+        y = data[selected_column]
 
+        label_encoder = LabelEncoder()
+        y_encoded = label_encoder.fit_transform(y)
 
-# Step 8: Save Model
-if st.button("Save Model"):
-    if model_name == "Logistic Regression":
-        model = LogisticRegression()
-    elif model_name == "Random Forest":
-        model = RandomForestClassifier()
-    elif model_name == "SVM":
-        model = SVC()
-    elif model_name == "K-Nearest Neighbors":
-        model = KNeighborsClassifier()
-    else:
-        st.write("Invalid model selection")
+        categorical_columns = X.select_dtypes(include=["object"]).columns
+        X_encoded = pd.get_dummies(X, columns=categorical_columns)
 
-    X = data.drop(columns=[selected_column])
-    y = data[selected_column]
+        model.fit(X_encoded, y_encoded)
 
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
+        # Save the trained model
+        model_filename = f"{model_name.lower()}_model.pkl"
+        with open(model_filename, "wb") as file:
+            pickle.dump(model, file)
 
-    categorical_columns = X.select_dtypes(include=["object"]).columns
-    X_encoded = pd.get_dummies(X, columns=categorical_columns)
-
-    model.fit(X_encoded, y_encoded)
-
-    # Save the trained model
-    model_filename = f"{model_name.lower()}_model.pkl"
-    with open(model_filename, "wb") as file:
-        pickle.dump(model, file)
-
-    st.write(f"{model_name} model saved as {model_filename}")
+        st.write(f"{model_name} model saved as {model_filename}")
 
 # Step 9
 st.header("Test Pretrained Model")
@@ -185,14 +202,13 @@ if pretrained_model_file is not None:
 
     # Step 10: Select your dataset
     uploaded_test_file = st.file_uploader("Choose a CSV file for testing", type="csv")
-    
+
     if uploaded_test_file is not None:
         test_data = pd.read_csv(uploaded_test_file)
 
     # Step 11: Select the column to predict
     selected_predict_column = st.selectbox("Select the column to predict", test_data.columns)
 
-    
     # Reorder columns in the same order as used during training
     X_test = test_data.drop(columns=[selected_predict_column])
     X_test_encoded = pd.get_dummies(X_test, columns=categorical_columns)  # Or use the same encoder objects
@@ -208,4 +224,3 @@ if pretrained_model_file is not None:
         # Step 13: Display predictions or other relevant information
         st.write("Predictions:")
         st.write(y_pred)
-
